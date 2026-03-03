@@ -1,0 +1,446 @@
+================================================================================
+DATA MINING + TIME SERIES TREND FORECASTING FOR RESEARCH KEYWORDS
+================================================================================
+
+PROBLEM STATEMENT
+================================================================================
+
+Goal: Mine frequent keyword itemsets from scientific papers (1950-2025),
+compute principled trend scores via unexpected lift vs baseline, and forecast
+trending itemsets for 2026.
+
+Input Data:
+  - papers.csv: (paper_id, year, citation_count)
+  - paper_phrases.json: { paper_id -> [phrase_1, phrase_2, ...] }
+
+Output:
+  - Itemset universe discovered via frequent itemset mining
+  - Per-year support and trend residuals (2021-2025)
+  - Predicted trend scores for 2026
+  - Ranked list of top 100 itemsets for 2026
+
+
+PHASE 1: PREPROCESSING
+================================================================================
+
+1.1 Phrase Normalization
+
+For each phrase p in paper_phrases.json:
+  - Apply NFKC Unicode normalization
+  - Convert to lowercase
+  - Remove non-word characters: replace [^\w\s] with space
+  - Collapse consecutive whitespace to single space
+  - Strip leading/trailing whitespace
+
+  normalize(p) = NFKC(lowercase(remove_punct(collapse_ws(strip(p)))))
+
+1.2 Document Frequency Filtering
+
+For the retained papers with valid (paper_id, year) in date range [min_year, max_year]:
+
+  Global DF count per phrase:
+    df(phrase) = |{papers containing phrase}|
+
+  Filter by document frequency bounds:
+    - Keep phrase if: df_min_count <= df(phrase) <= df_max_frac * N_total
+
+  Where N_total = number of papers with valid dates in range.
+
+  Default parameters:
+    df_min_count = 2
+    df_max_frac = 0.25 (remove very common phrases)
+
+1.3 Phrase to Integer Indexing
+
+Build bidirectional maps:
+  phrase_to_id: str -> int        [sorted phrases assigned sequential IDs]
+  id_to_phrase: int -> str        [reverse lookup for interpretation]
+
+  Result: filtered_phrases = {phrases meeting DF thresholds}
+          phrase_to_id = {p: i for i, p in enumerate(sorted(filtered_phrases))}
+
+
+PHASE 2: TRANSACTION BUILDING
+================================================================================
+
+2.1 Per-Year Transaction Lists
+
+For each year t in [min_year, max_year]:
+
+  T_t = {transaction_p : p in Papers(t)}
+  
+  where transaction_p = sorted( {phrase_to_id[phrase] : phrase in phrases(p)} )
+
+  Papers(t) = {p : paper_year[p] == t and p has >=1 phrase after filtering}
+
+2.2 Year Metrics
+
+For each year t:
+  N_t = |T_t| = number of papers in year t
+  sup_count_t(i) = |{transaction in T_t : item i in transaction}|
+
+
+PHASE 3: FREQUENT ITEMSET MINING
+================================================================================
+
+3.1 Mining 2-Itemsets (Pairs) Per Year
+
+For each year t:
+
+  Input: T_t (transactions), N_t (population size)
+  Parameters: minsup_frac, min_count, min_lift
+
+  Mine:
+    - For each transaction tx in T_t:
+        Increment counter for all 2-combinations: (i, j) in C(tx, 2)
+    
+    - pair_count_t(i,j) = |{tx in T_t : i in tx AND j in tx}|
+
+  Filter by minimum support:
+    min_sup_count = max(min_count, ceil(minsup_frac * N_t))
+    
+    frequent_pairs_t = {(i,j) : pair_count_t(i,j) >= min_sup_count}
+
+3.2 Association Metrics
+
+For each pair (i, j) in frequent_pairs_t:
+
+  Support Fractions:
+    supp_t({i})      = sup_count_t(i) / N_t
+    supp_t({j})      = sup_count_t(j) / N_t
+    supp_t({i,j})    = pair_count_t(i,j) / N_t
+
+  Lift (strength of co-occurrence):
+    lift_t(i,j) = supp_t({i,j}) / (supp_t({i}) * supp_t({j}) + eps)
+
+  where eps = 1e-12 (numerical stability)
+
+  Filter strong pairs:
+    strong_pairs_t = {(i,j) : lift_t(i,j) >= min_lift}
+
+3.3 Mining 3-Itemsets (Triples) Per Year
+
+Candidate generation (pruning strategy):
+  - Only consider triples (i,j,k) where ALL THREE pairwise subsets are
+    in strong_pairs_t (Apriori principle + lift filtering)
+
+  For each transaction tx in T_t:
+    For each 3-combination (i,j,k) in C(tx, 3):
+      If (i,j), (i,k), (j,k) all in strong_pairs_t:
+        Increment triple_count_t(i,j,k)
+
+  Filter by support:
+    strong_triples_t = {
+      (i,j,k) : triple_count_t(i,j,k) >= min_sup_count AND
+                 min( lift_t(i,j), lift_t(i,k), lift_t(j,k) ) >= min_lift
+    }
+
+  No mining of k > 3 (computational budget constraint).
+
+
+PHASE 4: ITEMSET UNIVERSE CONSTRUCTION
+================================================================================
+
+4.1 Stable Itemset Selection
+
+Retain itemset s = (i_1, i_2, ..., i_k) if:
+  - Active in >= min_active_years years across [min_year, max_year], OR
+  - Recently active: supp_{2023, 2024, or 2025}(s) > 0
+
+  Default: min_active_years = 3
+
+  Result: itemsets = list of all Itemsets meeting stability criteria,
+          sorted by (size, IDs)
+
+4.2 Yearly Metrics Matrix
+
+For each year t in [min_year, max_year] and each itemset s:
+
+  Get metrics from mining phase:
+    - If s is a pair (i,j): use pair_metrics_t(i,j)
+    - If s is a triple (i,j,k): use triple_metrics_t(i,j,k)
+    - Otherwise: count=0, supp_frac=0, lift_min=0
+
+  Compute log-support transform:
+    z_t(s) = log(1 + supp_t(s))
+
+    where supp_t(s) = supp_frac from mining output
+
+  Store:
+    supp_series(s) = [supp_t(s) for t in years]
+    z_series(s)    = [z_t(s) for t in years]
+
+
+PHASE 5: BASELINE FORECASTING AND RESIDUALS
+================================================================================
+
+5.1 Rolling Window Baseline
+
+For each itemset s and year t:
+
+  Use past window of length L (default L=5):
+    history_t(s) = [z_{t-L}(s), z_{t-L+1}(s), ..., z_{t-1}(s)]
+
+  This ensures NO LEAKAGE: forecast for year t uses only data up to year t-1.
+
+5.2 Baseline Method A: Drift Forecast
+
+  mu_t(s) = mean(history_t(s))
+  
+  drift_t(s) = mean( [z_{i+1}(s) - z_i(s) : i in [t-L, t-1)) ] )
+  
+  z_hat_t(s) = mu_t(s) + drift_t(s)
+
+  Residual:
+    r_t(s) = z_t(s) - z_hat_t(s)
+
+5.3 Baseline Method B: AR(1) Forecast
+
+  Fit on history window:
+    z_i ≈ a*z_{i-1} + b
+
+  OLS solution:
+    x = [z_{t-L}, ..., z_{t-2}]     (lag-1 values)
+    y = [z_{t-L+1}, ..., z_{t-1}]   (target values)
+    
+    mu_x = mean(x)
+    mu_y = mean(y)
+    var_x = sum( (x_i - mu_x)^2 )
+    cov(x,y) = sum( (x_i - mu_x)*(y_i - mu_y) )
+    
+    a = cov(x,y) / var_x    (if var_x > eps, else a=0)
+    b = mu_y - a*mu_x
+
+  Forecast:
+    z_hat_t(s) = a*z_{t-1}(s) + b
+
+  Residual:
+    r_t(s) = z_t(s) - z_hat_t(s)
+
+5.4 Trend Definition
+
+Trend is NOT just "bigger than last year"; it is UNEXPECTED CHANGE:
+
+  trend_t(s) = residual_t(s) = z_t(s) - z_hat_t(s)
+
+  Positive trend_t(s): itemset s is growing faster than baseline model predicts
+  Negative trend_t(s): itemset s is growing slower than baseline predicts
+
+
+PHASE 6: 2026 PREDICTION
+================================================================================
+
+6.1 Residual Series Forecasting
+
+For each itemset s:
+
+  Extract recent residuals from window [2021, 2025]:
+    r_{2021..2025}(s) = [r_2021(s), r_2022(s), ..., r_2025(s)]
+
+  Predict 2026 residual via mean (simplest approach):
+    r_pred_2026(s) = mean( r_{2021..2025}(s) )
+
+  Alternatively use AR(1) on residual series, but mean is more robust
+  to sparse/noisy recent data.
+
+6.2 Ranking Score
+
+Primary ranking score for 2026:
+  score(s) = r_pred_2026(s)
+
+  (Items with highest predicted residual are ranked first.)
+
+  Optional weighted rank (recent_support adjustment):
+    score_weighted(s) = r_pred_2026(s) * (1 + recent_support(s))
+    
+    where recent_support(s) = mean(supp_2023, supp_2024, supp_2025)(s)
+
+  Use score_weighted for final 2026 ranking if you want to upweight
+  items that are both trending AND already established.
+
+
+PHASE 7: EVALUATION (BACKTEST)
+================================================================================
+
+7.1 Next-Year Alignment Test
+
+For each year t in [2005, 2024]:
+
+  Rank all itemsets by residual r_t(s) (descending).
+  
+  Predict: Top-K items at year t will remain top-K at year t+1.
+  
+  Compute:
+    Prediction rank: rank_pred = [itemsets sorted by r_t, descending][:K]
+    Realized rank:   rank_real = [itemsets sorted by r_{t+1}, descending][:K]
+    
+    Hits = |rank_pred ∩ rank_real|
+
+  Metrics:
+    Precision@K = Hits / K
+    
+    NDCG@K = (DCG_pred / IDCG)
+    
+      DCG_pred = sum_{i=1}^{K} rel_i / log_2(i+1)
+      
+      where rel_i = 1 if rank_pred[i] in rank_real, else 0
+      
+      IDCG = sum_{i=1}^{min(K, |rank_real|)} 1 / log_2(i+1)
+
+
+OUTPUT FILES
+================================================================================
+
+1. itemsets_yearly_metrics.csv
+   
+   Columns: year, itemset, k, sup_count, supp_frac, z, z_hat, residual, lift_min, N_year
+   
+   Complete time series for all itemsets × years.
+   Use to analyze individual itemset trends over time.
+
+2. top_itemsets_2026.txt
+   
+   Human-readable ranked list of top 100 itemsets for 2026.
+   Columns: rank, itemset, k, pred_residual_2026, recent_support
+   
+   Interpretation: itemsets with highest pred_residual_2026 are 
+   the most "unexpectedly growing" for 2026.
+
+3. evaluation_2005_2025.csv
+   
+   Year-by-year backtest scores: Precision@K and NDCG@K
+   for the next-year alignment test.
+   
+   If precision/NDCG are high: residual-based forecasting is predictive.
+
+4. top_trending_itemsets_2005_2025.csv
+   
+   Per-year snapshots: top 100 itemsets ranked by residual
+   for each year in [2005, 2025].
+   
+   Use to qualitatively inspect what was trending in past years
+   and validate forecast logic.
+
+
+ALGORITHM SUMMARY
+================================================================================
+
+Input:  papers.csv, paper_phrases.json, config params
+Output: 2026 itemset ranking + historical trend series
+
+  1. Normalize & filter phrases by doc frequency
+  2. Build per-year transactions (phrase IDs per paper)
+  3. For each year: mine frequent pairs & triples with lift >= min_lift
+  4. Retain stable itemsets (active >= 3 years or recent activity)
+  5. For each itemset & year: compute z_t = log(1 + supp_t)
+  6. For each itemset: compute rolling residuals r_t = z_t - z_hat_t
+     using drift or AR(1) baseline on [t-L, t-1]
+  7. Predict 2026: r_2026_pred = mean(r_2021..2025)
+  8. Rank by r_2026_pred (with optional recent_support weighting)
+  9. Backtest: precision@K and NDCG@K for next-year prediction
+ 10. Write outputs: metrics CSV, 2026 report, per-year trends, evaluation
+
+No data leakage: all past residuals use only historical data (t < current year).
+
+
+PARAMETERS AND TUNING
+================================================================================
+
+Phrase filtering:
+  --df_min_count        minimum global document frequency (default: 2)
+  --df_max_frac         max fraction of papers (default: 0.25)
+
+Mining:
+  --minsup_frac         minimum support fraction per year (default: 0.01)
+  --min_count           minimum support count per year (default: 3)
+  --min_lift            minimum lift threshold (default: 2.0)
+  --max_k               max itemset size (default: 3)
+
+Baseline:
+  --baseline            "drift" or "ar1" (default: "drift")
+  --window              rolling window length in years (default: 5)
+
+Output:
+  --topm                top M itemsets to report (default: 100)
+  --min_active_years    min years active for retention (default: 3)
+  --eval_k              precision@K, NDCG@K for backtest (default: 50)
+
+Date range:
+  --min_year            earliest year to include (default: 1950)
+  --max_year            latest year (default: 2025)
+
+
+COMPUTATIONAL COMPLEXITY
+================================================================================
+
+Let:
+  N = total papers across time period
+  V = vocabulary size (items)
+  T = number of years
+  
+Preprocessing:   O(N)   [scan papers, compute DF]
+Transactions:    O(N)   [build phrase ID lists per paper]
+Pair mining:     O(N * avg_tx_items^2) ≈ O(N)  [hash-based counting]
+Triple mining:   O(N * avg_tx_items^3) but pruned to only strong pair extensions
+Series building: O(|itemsets| * T)
+Baseline & residuals: O(|itemsets| * T * window)
+Forecast:        O(|itemsets|)
+
+Overall: O(N * avg_tx_items^3) dominated by triple mining, mitigated by
+         Apriori pruning and lift filtering. Typically manageable for V ~ 10^3.
+
+
+INTERPRETATION GUIDE
+================================================================================
+
+What does "high predicted residual for 2026" mean?
+
+  If r_pred_2026(s) = 0.05 (positive and large):
+    Itemset s is predicted to EXCEED baseline growth in 2026.
+    Historical residuals show strong upward trend in 2021-2025.
+    Expect this itemset to appear in more papers in 2026.
+
+  If r_pred_2026(s) = -0.03 (negative):
+    Itemset s is predicted to UNDERPERFORM baseline expectation.
+    It may decline or grow slower than trend in 2026.
+    Lower priority for 2026 prediction.
+
+Why not just "more papers next year"?
+
+  Simple count-based "growth = N_2026 > N_2025" ignores:
+    - Different research areas scale at different rates
+    - Inflation from more total papers published
+    - Cyclical or plateau-ing trends
+  
+  Residual-based approach isolates UNEXPECTED acceleration/deceleration
+  relative to each itemset's own baseline trajectory.
+
+Why log-support z_t = log(1 + supp_t)?
+
+  - log transform stabilizes variance across support ranges
+  - log(1 + x) is defined for all x >= 0 and differentiable
+  - Residuals r_t on log-scale are interpretable as "log-growth deviation"
+  - Supports both drift and AR(1) baseline forecasting
+
+
+REFERENCES & NOTES
+================================================================================
+
+Methodology is hybrid:
+  - Frequent itemset mining: classic Apriori + lift filtering
+  - Residual forecasting: ARIMA-like, but simplified to drift/AR(1)
+  - Evaluation: rank metrics commonly used in information retrieval (NDCG)
+
+No external ML dependencies beyond standard Python:
+  - statistics (mean, stdev)
+  - itertools (combinations)
+  - collections (Counter)
+  - math (log, ceil)
+  - csv, json (I/O)
+
+Leakage safeguards:
+  - Baseline z_hat_t(s) computed ONLY from [t-L, t-1]
+  - Residuals r_t(s) ONLY after z_hat_t available
+  - 2026 prediction uses 2021-2025 window, no future data
+
+================================================================================

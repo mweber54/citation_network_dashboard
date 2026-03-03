@@ -1,0 +1,6 @@
+Top predicted itemsets for 2026
+rank	itemset	k	pred_residual_2026	recent_support	score_weighted
+1	llm | reinforcement learning	2	0.005042	0.008511	0.005085
+2	computer vision | deep learning	2	0.000838	0.004016	0.000842
+3	human feedback | reinforcement learning	2	0.000838	0.004016	0.000842
+4	object detection | point cloud	2	-0.003046	0.000000	-0.003046
