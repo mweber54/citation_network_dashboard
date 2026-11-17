@@ -1,0 +1,107 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Temporal Hypergraph GNN: Problem Formulation and Prediction Objective}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem Setup}
+Let the dataset be a temporal hypergraph over years $\mathcal{Y}=\{y_1,\dots,y_T\}$ with:
+\begin{itemize}[leftmargin=1.5em]
+  \item keyword nodes $\mathcal{V}$,
+  \item paper hyperedges $\mathcal{E}$,
+  \item incidence pairs $(v,e)$ encoded by a hyperedge index,
+  \item node features $\mathbf{X}_V \in \mathbb{R}^{|\mathcal{V}|\times d_v}$,
+  \item hyperedge features $\mathbf{X}_E \in \mathbb{R}^{|\mathcal{E}|\times d_e}$,
+  \item topic label map $c(v)\in\{1,\dots,C\}$ for each keyword node.
+\end{itemize}
+
+Each paper hyperedge $e$ has year $\tau(e)\in\mathcal{Y}$. The model forecasts topic-level trend residuals for a target year $y^\star$ from a window of previous years.
+
+\section{Topic Signals}
+For each topic $k\in\{1,\dots,C\}$ and year $t\in\mathcal{Y}$, define three channel signals:
+\begin{align}
+U_{k,t} &: \text{topic usage mass},\\
+M_{k,t} &: \text{topic citation mass},\\
+A_{k,t} &: \text{topic intensity}.
+\end{align}
+These are computed by aggregating keyword/paper activity through the hypergraph and then pooled to topic level.
+
+Apply log transform per channel:
+\begin{align}
+Z^u_{k,t} &= \log(1+\max(U_{k,t},0)),\\
+Z^m_{k,t} &= \log(1+\max(M_{k,t},0)),\\
+Z^a_{k,t} &= \log(1+\max(A_{k,t},0)).
+\end{align}
+
+\section{Residual Targets via Rolling Baseline}
+For each channel $q\in\{u,m,a\}$, a rolling baseline with window length $L_b$ is fitted using selected families (logistic/exp/power), producing residuals:
+\begin{equation}
+T^q_{k,t} = Z^q_{k,t} - \widehat{Z}^q_{k,t}.
+\end{equation}
+
+For each training year $t$, the supervised target matrix is
+\begin{equation}
+\mathbf{Y}_t(k,:) = \big[T^u_{k,t},\;T^m_{k,t},\;T^a_{k,t}\big] \in \mathbb{R}^{3}.
+\end{equation}
+
+\section{Input Window and THGNN Prediction}
+For each year $t$, construct a temporal sub-hypergraph from years
+\begin{equation}
+[t-L_g,\;t-1],
+\end{equation}
+where $L_g$ is the GNN window length.
+
+A temporal hypergraph network (THGNN) predicts per-topic residual channels:
+\begin{equation}
+\widehat{\mathbf{Y}}_t = f_\theta\big(\mathbf{X}_V,\mathbf{X}_E,\mathcal{H}_{t-L_g:t-1},c(\cdot)\big)
+\in \mathbb{R}^{C\times 3}.
+\end{equation}
+
+\section{Training Objective}
+Let $\omega=(\omega_u,\omega_m,\omega_a)$ be channel weights computed from inverse variance of training targets and normalized to sum to 1.
+
+The loss for one training year $t$ is weighted MSE:
+\begin{equation}
+\mathcal{L}_t(\theta)=\frac{1}{3C}\sum_{k=1}^{C}\sum_{q\in\{u,m,a\}}\omega_q\left(\widehat{Y}^{(q)}_{k,t}-Y^{(q)}_{k,t}\right)^2.
+\end{equation}
+
+Overall objective:
+\begin{equation}
+\min_{\theta}\;\frac{1}{|\mathcal{T}_{\text{train}}|}\sum_{t\in\mathcal{T}_{\text{train}}}\mathcal{L}_t(\theta),
+\end{equation}
+optimized with AdamW and gradient clipping.
+
+\section{Forecast for Target Year}
+For target year $y^\star$, build the inference sub-hypergraph from
+\begin{equation}
+[y^\star-L_g,\;y^\star-1],
+\end{equation}
+and obtain predicted residual channels
+\begin{equation}
+\widehat{\mathbf{R}}_{k} = \big(\widehat{r}^u_k,\widehat{r}^m_k,\widehat{r}^a_k\big).
+\end{equation}
+
+The fused trend score is
+\begin{equation}
+S_k = \omega_u\widehat{r}^u_k + \omega_m\widehat{r}^m_k + \omega_a\widehat{r}^a_k.
+\end{equation}
+Topics are ranked by descending $S_k$.
+
+\section{Output}
+The system returns:
+\begin{itemize}[leftmargin=1.5em]
+  \item ranked top-$N$ topics by fused score,
+  \item channel-wise predicted residuals,
+  \item training history (train/validation loss),
+  \item focus-topic historical signal and residual trajectories.
+\end{itemize}
+
+\end{document}

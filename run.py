@@ -37,57 +37,100 @@ import torch.nn.functional as F
 # PyG
 from torch_geometric.nn import HypergraphConv
 
-# curve fitting
-from scipy.optimize import curve_fit
-
 # -----------------------------
 # Baseline curve families
 # -----------------------------
+_CURVE_BASIS_CACHE: Dict[Tuple[str, Tuple[float, ...]], Dict[str, np.ndarray]] = {}
+
+
+def _safe_exp(x: np.ndarray) -> np.ndarray:
+    return np.exp(np.clip(x, -60.0, 60.0))
+
+
 def g_exp(tau, alpha, beta, gamma):
-    return alpha + beta * np.exp(gamma * tau)
+    tau = np.asarray(tau, dtype=np.float64)
+    return alpha + beta * _safe_exp(gamma * tau)
+
 
 def g_power(tau, alpha, beta, gamma):
+    tau = np.asarray(tau, dtype=np.float64)
     return alpha + beta * np.power(tau + 1.0, gamma)
 
-def g_logistic(tau, K, r, tau0, alpha):
-    return alpha + K / (1.0 + np.exp(-r * (tau - tau0)))
 
-def fit_curve_family(tau: np.ndarray, y: np.ndarray, family: str, maxfev: int = 20000):
+def g_logistic(tau, K, r, tau0, alpha):
+    tau = np.asarray(tau, dtype=np.float64)
+    return alpha + K / (1.0 + _safe_exp(-r * (tau - tau0)))
+
+
+def _get_curve_basis_specs(tau: np.ndarray, family: str) -> Dict[str, np.ndarray]:
+    key = (family, tuple(np.asarray(tau, dtype=np.float64).tolist()))
+    cached = _CURVE_BASIS_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    tau = np.asarray(tau, dtype=np.float64)
+
     if family == "exp":
-        f = g_exp
-        alpha0 = float(y.min())
-        beta0 = float(max(y.max() - y.min(), 1e-3))
-        gamma0 = 0.05
-        p0 = [alpha0, beta0, gamma0]
-        bounds = ([-np.inf, 0.0, -2.0], [np.inf, np.inf, 2.0])
+        gamma = np.linspace(-2.0, 2.0, 121, dtype=np.float64)
+        basis = _safe_exp(gamma[:, None] * tau[None, :])
+        spec = {"basis": basis, "gamma": gamma}
     elif family == "power":
-        f = g_power
-        alpha0 = float(y.min())
-        beta0 = float(max(y.max() - y.min(), 1e-3))
-        gamma0 = 0.5
-        p0 = [alpha0, beta0, gamma0]
-        bounds = ([-np.inf, 0.0, -2.0], [np.inf, np.inf, 5.0])
+        gamma = np.linspace(-2.0, 5.0, 141, dtype=np.float64)
+        basis = np.power(tau[None, :] + 1.0, gamma[:, None])
+        spec = {"basis": basis, "gamma": gamma}
     elif family == "logistic":
-        f = g_logistic
-        alpha0 = float(y.min())
-        K0 = float(max(y.max() - y.min(), 1e-3))
-        r0 = 0.2
-        tau00 = float(np.median(tau))
-        p0 = [K0, r0, tau00, alpha0]
-        bounds = ([0.0, -5.0, -10.0, -np.inf], [np.inf, 5.0, 10.0, np.inf])
+        r = np.linspace(-5.0, 5.0, 61, dtype=np.float64)
+        tau0 = np.linspace(-10.0, 10.0, 61, dtype=np.float64)
+        r_grid, tau0_grid = np.meshgrid(r, tau0, indexing="ij")
+        logits = r_grid[..., None] * (tau[None, None, :] - tau0_grid[..., None])
+        basis = 1.0 / (1.0 + _safe_exp(-logits))
+        spec = {
+            "basis": basis.reshape(-1, tau.size),
+            "r": r_grid.reshape(-1),
+            "tau0": tau0_grid.reshape(-1),
+        }
     else:
         raise ValueError(f"Unknown family: {family}")
 
-    try:
-        params, _ = curve_fit(f, tau, y, p0=p0, bounds=bounds, maxfev=maxfev)
-        yhat = f(tau, *params)
-        mse = float(np.mean((y - yhat) ** 2))
-        return params, mse
-    except Exception:
-        # fall back to mean baseline if fitting fails
-        yhat = np.full_like(y, y.mean(), dtype=float)
-        mse = float(np.mean((y - yhat) ** 2))
-        return np.array([y.mean()], dtype=float), mse
+    _CURVE_BASIS_CACHE[key] = spec
+    return spec
+
+
+def _fit_affine_basis_grid(y: np.ndarray, basis: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    y = np.asarray(y, dtype=np.float64)
+    basis = np.asarray(basis, dtype=np.float64)
+
+    y_mean = float(np.mean(y))
+    b_mean = np.mean(basis, axis=1)
+    b_centered = basis - b_mean[:, None]
+    y_centered = y - y_mean
+
+    denom = np.sum(b_centered * b_centered, axis=1)
+    # Keep this elementwise to avoid BLAS/MKL dispatch on Windows.
+    numer = np.sum(b_centered * y_centered[None, :], axis=1)
+
+    scale = np.divide(numer, denom, out=np.zeros_like(numer), where=denom > 1e-12)
+    scale = np.maximum(scale, 0.0)
+    alpha = y_mean - scale * b_mean
+
+    pred = alpha[:, None] + scale[:, None] * basis
+    mse = np.mean((pred - y[None, :]) ** 2, axis=1)
+    return alpha, scale, mse
+
+
+def fit_curve_family(tau: np.ndarray, y: np.ndarray, family: str):
+    spec = _get_curve_basis_specs(tau, family)
+    alpha, scale, mse = _fit_affine_basis_grid(y, spec["basis"])
+    best = int(np.argmin(mse))
+
+    if family in {"exp", "power"}:
+        params = np.array([alpha[best], scale[best], spec["gamma"][best]], dtype=np.float64)
+    elif family == "logistic":
+        params = np.array([scale[best], spec["r"][best], spec["tau0"][best], alpha[best]], dtype=np.float64)
+    else:
+        raise ValueError(f"Unknown family: {family}")
+
+    return params, float(mse[best])
 
 def predict_curve_family(tau: np.ndarray, family: str, params: np.ndarray) -> np.ndarray:
     if family == "exp" and len(params) > 1:

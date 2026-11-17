@@ -1,0 +1,160 @@
+Repository Summary
+Generated: 2026-04-03
+Root: C:\Users\User\data2
+
+1) Project Purpose
+This repository contains a computer-science literature pipeline that:
+- extracts topic/keyphrase structure from paper metadata,
+- builds a keyword-paper hypergraph,
+- trains/evaluates a temporal hypergraph neural network (THGNN) for residual forecasting,
+- runs a frequent-itemset data-mining baseline,
+- serves an interactive Streamlit dashboard to inspect graph slices and compare mining vs GNN outputs.
+
+2) High-Level Data Flow
+A) Input corpus
+- cs_citation_network/papers.csv
+- cs_citation_network/citations.csv
+
+B) Topic extraction
+- build_topics.py -> topics_out/topics.json, phrase_to_topic.csv, paper_to_topic.csv, paper_phrases.json
+
+C) Hypergraph construction
+- build_graph.py + topics_out + papers.csv -> hypergraph.pt, hypergraph_summary.txt, hypergraph.gexf
+
+D) Modeling
+- run.py trains THGNN residual model from hypergraph.pt and optionally papers.csv
+- output model artifact: thgnn_residual_model.pt
+
+E) Dashboard
+- streamlit_app.py + frontend_services.py load outputs and render the interactive app
+
+3) Root-Level Files
+- build_topics.py
+  Topic Builder v2. Extracts and normalizes phrases, scores phrase quality, builds co-occurrence graph,
+  performs Louvain community detection + split/merge refinement, generates labels, exports topic artifacts.
+
+- build_graph.py
+  Converts topic outputs into a keyword-paper hypergraph for PyTorch Geometric.
+  Writes tensors/metadata in hypergraph.pt and text/graph exports.
+
+- run.py
+  THGNN training/inference pipeline for topic residual prediction.
+  Contains curve-family baselines (logistic/exp/power), temporal windowing, model train/eval logic.
+
+- frontend_services.py
+  Dashboard backend service layer: data loading, snapshot building, mining and GNN orchestration,
+  and result dataclasses used by Streamlit.
+
+- streamlit_app.py
+  Main UI app. Renders graph and analytics panels, controls, forms, and Plotly/canvas visualization.
+
+- hypergraph.pt
+  Latest generated hypergraph tensor bundle.
+
+- hypergraph_summary.txt
+  Human-readable stats for hypergraph.pt (nodes, edges, incidences, features, topic labels).
+
+- hypergraph.gexf
+  Graph export for Gephi/graph tooling.
+
+- thgnn_residual_model.pt
+  Saved trained THGNN model checkpoint artifact.
+
+- data_mining_problem_prediction.tex
+  LaTeX document for the data-mining approach write-up.
+
+- gnn_problem_prediction.tex
+  LaTeX document for the GNN approach write-up.
+
+- test.html
+  Standalone HTML page likely used for visualization/testing experiments.
+
+4) Dataset Folder
+- cs_citation_network/papers.csv
+  Primary paper metadata dataset (paper_id, title, abstract, venue, fields_of_study, year, citation_count, etc.).
+
+- cs_citation_network/citations.csv
+  Citation edge list / citation relationship data.
+
+- cs_citation_network/summary.txt
+  Dataset-level notes/summary.
+
+5) Topic Output Folder (Generated)
+- topics_out/topics.json
+  Topic catalog (topic_id, label, top phrases, diagnostics, trend fields).
+
+- topics_out/phrase_to_topic.csv
+  Phrase-to-topic mapping with phrase score.
+
+- topics_out/paper_to_topic.csv
+  Paper-level topic assignment scores and confidence/margin columns.
+
+- topics_out/paper_phrases.json
+  Per-paper retained phrase list used by downstream hypergraph builder.
+
+- topics_out/topics_trend_targets.csv
+  Topic trend/target table used for analysis and visualization.
+
+6) Data-Mining Module
+Folder: data_mining/
+
+- baseline.py
+  Residual baseline utilities for itemset trend modeling.
+
+- forecast_2026.py
+  Next-year residual forecasting for itemsets.
+
+- mine_pairs.py
+  Frequent pair mining and pair-level metrics.
+
+- mine_triples.py
+  Triple mining logic and scoring.
+
+- preprocess.py
+  Phrase normalization and corpus preprocessing for mining pipeline.
+
+- transactions.py
+  Converts papers/phrases to transactional representation by year.
+
+- series.py
+  Time-series shaping for itemsets and yearly metric rows.
+
+- pipeline.py
+  End-to-end orchestration for the mining workflow.
+
+- METHODOLOGY.txt
+  Method description for mining process and assumptions.
+
+Generated mining outputs in same folder:
+- evaluation_2005_2025.csv
+- itemsets_yearly_metrics.csv
+- top_itemsets_2026.txt
+- top_trending_itemsets_2005_2025.csv
+
+7) Cache/Bytecode
+Folder: __pycache__/ at root and data_mining/__pycache__/
+- Python bytecode cache files (*.pyc) produced by local execution.
+- Not source-of-truth; safe to regenerate.
+
+8) Current Snapshot (from latest generated artifacts)
+- Topic outputs: 20 topics, 247 phrases, 2191 papers with retained phrases.
+- Hypergraph outputs: 247 keyword nodes, 2129 paper hyperedges, 2917 incidence pairs.
+- Year range in hypergraph: 1974-2025.
+
+9) Typical Commands
+- Rebuild topics:
+  python build_topics.py --input cs_citation_network/papers.csv --out topics_out
+
+- Rebuild hypergraph:
+  python build_graph.py --papers_csv cs_citation_network/papers.csv --topics_dir topics_out --out .
+
+- Run dashboard:
+  streamlit run streamlit_app.py
+
+- Run THGNN pipeline:
+  python run.py
+
+10) Notes
+- The workflow is data-first: regenerate topics_out before hypergraph when topic logic changes.
+- The dashboard consumes generated artifacts; stale files can cause mismatched visuals.
+- LaTeX files provide narrative/report context but are not required for runtime execution.

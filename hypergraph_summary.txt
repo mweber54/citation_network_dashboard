@@ -1,0 +1,37 @@
+============================================================
+  HYPERGRAPH SUMMARY
+============================================================
+  Keyword nodes        : 247
+  Paper hyperedges     : 2,129
+  Incidence pairs      : 2,917
+  Avg keywords / paper : 1.37
+  Avg papers / keyword : 11.81
+  Topics               : 20
+  Year range           : 1974 – 2025
+  Papers ≥ 2023        : 632
+
+  Node features  (per keyword)  : [topic_id_norm, score_norm, word_count, degree_norm]
+  Edge features  (per paper)    : [year_norm, log_cit_norm, num_kw, mean_kw_score_norm, is_recent]
+
+  Topic labels:
+      0: Genetic Algorithm
+      1: Large Language Models
+      2: Natural Language Processing
+      3: Neural Networks
+      4: BERT
+      5: 3D Vision and Object Detection
+      6: Deep Learning
+      7: Software Engineering
+      8: Algorithm
+      9: Open Vocabulary Object Detection
+     10: Reinforcement Learning
+     11: Deep Reinforcement Learning
+     12: Learning
+     13: Cloud Computing
+     14: Convolutional Neural Networks
+     15: Classification
+     16: Attention
+     17: Quantum
+     18: Deep Neural Network
+     19: Benchmark
+============================================================

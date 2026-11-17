@@ -1,0 +1,106 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Data Mining Task: Problem Formulation and Prediction Objective}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem Setup}
+Given papers and extracted phrases over years $t\in[t_{\min},t_{\max}]$, define yearly transaction sets
+\begin{equation}
+\mathcal{T}_t = \{\tau_{t,1},\dots,\tau_{t,N_t}\},
+\end{equation}
+where each transaction is a set of phrase IDs appearing in one paper.
+
+Goal:
+\begin{enumerate}[leftmargin=1.5em]
+  \item mine frequent/strong itemsets (pairs and triples) per year,
+  \item build itemset time series,
+  \item compute trend residuals against rolling baselines,
+  \item predict next-year trend score and rank itemsets.
+\end{enumerate}
+
+\section{Frequent Pair Mining (Per Year)}
+For year $t$, support count and fraction for pair $s=\{i,j\}$:
+\begin{align}
+\mathrm{sup\_count}_t(s) &= \left|\{\tau\in\mathcal{T}_t: i\in\tau,\;j\in\tau\}\right|,\\
+\mathrm{sup}_t(s) &= \frac{\mathrm{sup\_count}_t(s)}{N_t}.
+\end{align}
+
+A pair is frequent if
+\begin{equation}
+\mathrm{sup\_count}_t(s) \ge \max(\texttt{min\_count},\lceil \texttt{minsup\_frac}\cdot N_t\rceil).
+\end{equation}
+
+Lift of a pair:
+\begin{equation}
+\mathrm{lift}_t(i,j)=\frac{\mathrm{sup}_t(\{i,j\})}{\mathrm{sup}_t(\{i\})\,\mathrm{sup}_t(\{j\})+\varepsilon}.
+\end{equation}
+Strong pairs satisfy $\mathrm{lift}_t(i,j)\ge \texttt{min\_lift}$.
+
+\section{Triple Mining (Per Year)}
+For triple $s=\{i,j,k\}$, count and support are computed analogously.
+Candidate pruning uses pairwise strong-pair constraints; keep triples that satisfy minimum support and lift constraints.
+
+\section{Itemset Time Series Construction}
+Construct an itemset universe $\mathcal{S}$ from strong pairs/triples across years with activity constraints (e.g., minimum active years and recent activity).
+
+For each $s\in\mathcal{S}$ and year $t$, define support series:
+\begin{equation}
+\mathrm{sup}_t(s).
+\end{equation}
+Apply log transform:
+\begin{equation}
+z_t(s)=\log(1+\mathrm{sup}_t(s)).
+\end{equation}
+
+\section{Rolling Baseline and Residual Trend}
+For each itemset $s$, fit a rolling baseline on the previous $L$ years (method = drift or AR(1)).
+Predicted baseline:
+\begin{equation}
+\widehat{z}_t(s)=\text{Baseline}\big(z_{t-L}(s),\dots,z_{t-1}(s)\big).
+\end{equation}
+Residual trend signal:
+\begin{equation}
+r_t(s)=z_t(s)-\widehat{z}_t(s).
+\end{equation}
+A larger positive residual indicates unexpectedly strong growth relative to baseline behavior.
+
+\section{Next-Year Prediction Objective}
+For target year $t_0$ (e.g., 2025) and next-year forecast $t_0+1$ (e.g., 2026), predict residual via recent-window average:
+\begin{equation}
+\widehat{r}_{t_0+1}(s)=\frac{1}{|\mathcal{W}|}\sum_{\tau\in\mathcal{W}} r_{\tau}(s),
+\end{equation}
+where $\mathcal{W}$ is a residual window (e.g., recent years up to $t_0$).
+
+Define recent support statistic:
+\begin{equation}
+\mathrm{recent\_support}(s)=\frac{1}{|\mathcal{W}|}\sum_{\tau\in\mathcal{W}}\mathrm{sup}_{\tau}(s).
+\end{equation}
+
+Ranking scores:
+\begin{align}
+\mathrm{score}(s) &= \widehat{r}_{t_0+1}(s),\\
+\mathrm{score\_weighted}(s) &= \widehat{r}_{t_0+1}(s)\cdot\big(1+\mathrm{recent\_support}(s)\big).
+\end{align}
+
+Itemsets are ranked descending by score (or weighted score) to produce top predicted trends.
+
+\section{Outputs}
+The task returns:
+\begin{itemize}[leftmargin=1.5em]
+  \item top frequent pairs by support,
+  \item top pairs by lift,
+  \item top strong triples,
+  \item predicted next-year trending itemsets with residual-based ranking,
+  \item optional keyword-focused support/residual time series.
+\end{itemize}
+
+\end{document}
